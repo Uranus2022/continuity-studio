@@ -14,7 +14,11 @@ export type ShotFrame = {
   file_size: number;
   label: string | null;
   is_approved: boolean;
+  approved_at: string | null;
+  approved_by: string | null;
   is_canon: boolean;
+  canon_at: string | null;
+  canon_by: string | null;
   created_at: string;
   updated_at: string;
   signed_url: string | null;
@@ -26,6 +30,9 @@ type UploadShotFrameInput = {
   projectId: string;
   shotId: string;
 };
+
+const SHOT_FRAME_SELECT =
+  "id,shot_id,created_by,storage_path,file_name,mime_type,file_size,label,is_approved,approved_at,approved_by,is_canon,canon_at,canon_by,created_at,updated_at";
 
 function extensionForMimeType(mimeType: string) {
   if (mimeType === "image/png") return "png";
@@ -49,13 +56,13 @@ export async function listShotFrames(shotIds: string[]): Promise<ShotFrame[]> {
 
   const { data, error } = await supabase
     .from("shot_frames")
-    .select("id,shot_id,created_by,storage_path,file_name,mime_type,file_size,label,is_approved,is_canon,created_at,updated_at")
+    .select(SHOT_FRAME_SELECT)
     .in("shot_id", shotIds)
     .order("created_at", { ascending: false });
 
   if (error) throw error;
 
-  return Promise.all((data ?? []).map((frame) => attachSignedUrl(frame)));
+  return Promise.all((data ?? []).map((frame) => attachSignedUrl(frame as Omit<ShotFrame, "signed_url">)));
 }
 
 export async function uploadShotFrame({ file, userId, projectId, shotId }: UploadShotFrameInput): Promise<ShotFrame> {
@@ -90,7 +97,7 @@ export async function uploadShotFrame({ file, userId, projectId, shotId }: Uploa
       mime_type: file.type,
       file_size: file.size,
     })
-    .select("id,shot_id,created_by,storage_path,file_name,mime_type,file_size,label,is_approved,is_canon,created_at,updated_at")
+    .select(SHOT_FRAME_SELECT)
     .single();
 
   if (insertError || !data) {
@@ -98,7 +105,21 @@ export async function uploadShotFrame({ file, userId, projectId, shotId }: Uploa
     throw insertError ?? new Error("Could not save shot frame metadata.");
   }
 
-  return attachSignedUrl(data);
+  return attachSignedUrl(data as Omit<ShotFrame, "signed_url">);
+}
+
+export async function approveShotFrame(frameId: string): Promise<void> {
+  const { error } = await supabase.rpc("set_shot_frame_approved", {
+    p_frame_id: frameId,
+  });
+  if (error) throw error;
+}
+
+export async function canonShotFrame(frameId: string): Promise<void> {
+  const { error } = await supabase.rpc("set_shot_frame_canon", {
+    p_frame_id: frameId,
+  });
+  if (error) throw error;
 }
 
 export async function deleteShotFrame(frame: ShotFrame): Promise<void> {
