@@ -5,7 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import { useEffect, useMemo, useState } from "react";
 import { GenerationPanel } from "@/components/generation-panel";
 import { ShotFramePanel } from "@/components/shot-frame-panel";
-import { generateShotImage, type GenerationQuality } from "@/lib/generations";
+import { VideoWorkflowPanel, type VideoUploadMetadata } from "@/components/video-workflow-panel";
 import {
   approveShotFrame as approveShotFrameRecord,
   canonShotFrame as canonShotFrameRecord,
@@ -14,6 +14,14 @@ import {
   uploadShotFrame as uploadShotFrameFile,
   type ShotFrame,
 } from "@/lib/shot-frames";
+import {
+  approveShotVideoTake,
+  canonShotVideoTake,
+  deleteShotVideoTake,
+  listShotVideoTakes,
+  uploadShotVideoTake,
+  type ShotVideoTake,
+} from "@/lib/video-takes";
 import { supabase } from "@/lib/supabase";
 
 type Project = {
@@ -67,13 +75,13 @@ export default function Home() {
   const [booting, setBooting] = useState(true);
   const [loadingWorkspace, setLoadingWorkspace] = useState(false);
   const [error, setError] = useState("");
-  const [generationNotice, setGenerationNotice] = useState("");
   const [project, setProject] = useState<Project | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [shots, setShots] = useState<Shot[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
   const [shotAssets, setShotAssets] = useState<ShotAsset[]>([]);
   const [shotFrames, setShotFrames] = useState<ShotFrame[]>([]);
+  const [videoTakes, setVideoTakes] = useState<ShotVideoTake[]>([]);
   const [assetPreviewUrls, setAssetPreviewUrls] = useState<Record<string, string>>({});
   const [selectedNumber, setSelectedNumber] = useState(3);
   const [uploadingAssetId, setUploadingAssetId] = useState<string | null>(null);
@@ -81,7 +89,8 @@ export default function Home() {
   const [uploadingShotFrame, setUploadingShotFrame] = useState(false);
   const [deletingShotFrameId, setDeletingShotFrameId] = useState<string | null>(null);
   const [updatingShotFrameId, setUpdatingShotFrameId] = useState<string | null>(null);
-  const [generatingShotImage, setGeneratingShotImage] = useState(false);
+  const [uploadingVideoTake, setUploadingVideoTake] = useState(false);
+  const [busyVideoTakeId, setBusyVideoTakeId] = useState<string | null>(null);
 
   async function refreshAssetPreviews(nextAssets: Asset[]) {
     const entries = await Promise.all(
@@ -117,6 +126,14 @@ export default function Home() {
         shot.id === shotId ? { ...shot, status: shotResult.data.status as Shot["status"] } : shot,
       ),
     );
+  }
+
+  async function refreshVideoWorkflow(shotId: string) {
+    const takes = await listShotVideoTakes([shotId]);
+    setVideoTakes((current) => [
+      ...takes,
+      ...current.filter((take) => take.shot_id !== shotId),
+    ]);
   }
 
   async function loadWorkspace() {
@@ -158,18 +175,21 @@ export default function Home() {
       const shotIds = nextShots.map((shot) => shot.id);
       let links: ShotAsset[] = [];
       let frames: ShotFrame[] = [];
+      let takes: ShotVideoTake[] = [];
 
       if (shotIds.length) {
-        const [linkResult, frameResult] = await Promise.all([
+        const [linkResult, frameResult, videoResult] = await Promise.all([
           supabase
             .from("shot_assets")
             .select("shot_id,asset_id,role")
             .in("shot_id", shotIds),
           listShotFrames(shotIds),
+          listShotVideoTakes(shotIds),
         ]);
         if (linkResult.error) throw linkResult.error;
         links = (linkResult.data ?? []) as ShotAsset[];
         frames = frameResult;
+        takes = videoResult;
       }
 
       setProject(projectResult.data as Project);
@@ -178,6 +198,7 @@ export default function Home() {
       setRules((ruleResult.data ?? []) as Rule[]);
       setShotAssets(links);
       setShotFrames(frames);
+      setVideoTakes(takes);
       await refreshAssetPreviews(nextAssets);
 
       if (!nextShots.some((shot) => shot.shot_number === selectedNumber)) {
@@ -212,6 +233,7 @@ export default function Home() {
         setRules([]);
         setShotAssets([]);
         setShotFrames([]);
+        setVideoTakes([]);
         setAssetPreviewUrls({});
       }
     });
@@ -234,9 +256,14 @@ export default function Home() {
     [selected, shotFrames],
   );
 
-  const heroFrame = useMemo(
-    () => selectedFrames.find((frame) => frame.is_canon) ?? selectedFrames.find((frame) => frame.is_approved) ?? selectedFrames[0],
+  const currentCanonFrame = useMemo(
+    () => selectedFrames.find((frame) => frame.is_canon) ?? null,
     [selectedFrames],
+  );
+
+  const heroFrame = useMemo(
+    () => currentCanonFrame ?? selectedFrames.find((frame) => frame.is_approved) ?? selectedFrames[0],
+    [currentCanonFrame, selectedFrames],
   );
 
   const previousShot = useMemo(() => {
@@ -250,6 +277,30 @@ export default function Home() {
     () => previousShot ? shotFrames.find((frame) => frame.shot_id === previousShot.id && frame.is_canon) ?? null : null,
     [previousShot, shotFrames],
   );
+
+  const selectedVideoTakes = useMemo(
+    () => selected ? videoTakes.filter((take) => take.shot_id === selected.id) : [],
+    [selected, videoTakes],
+  );
+
+  const currentCanonVideo = useMemo(
+    () => selectedVideoTakes.find((take) => take.is_canon) ?? null,
+    [selectedVideoTakes],
+  );
+
+  const previousCanonVideo = useMemo(() => {
+    if (!selected) return null;
+    const priorShotIds = [...shots]
+      .filter((shot) => shot.shot_number < selected.shot_number)
+      .sort((a, b) => b.shot_number - a.shot_number)
+      .map((shot) => shot.id);
+
+    for (const shotId of priorShotIds) {
+      const take = videoTakes.find((item) => item.shot_id === shotId && item.is_canon);
+      if (take) return take;
+    }
+    return null;
+  }, [selected, shots, videoTakes]);
 
   const primaryFrameByShotId = useMemo(() => {
     const grouped = new Map<string, ShotFrame[]>();
@@ -283,6 +334,7 @@ export default function Home() {
   const selectedReferenceCount = selectedAssets.filter(
     (asset) => asset.reference_image_url && asset.lock_state === "canon",
   ).length;
+  const videoReady = continuityReady && Boolean(currentCanonFrame);
 
   const characters = assets.filter((asset) => asset.kind === "character");
   const locations = assets.filter((asset) => asset.kind === "location");
@@ -371,29 +423,6 @@ export default function Home() {
     setLockingAssetId(null);
   }
 
-  async function handleGenerateShotImage(directorNote: string, quality: GenerationQuality) {
-    if (!selected) return;
-    setGeneratingShotImage(true);
-    setError("");
-    setGenerationNotice("");
-
-    try {
-      const result = await generateShotImage({
-        shotId: selected.id,
-        directorNote,
-        quality,
-      });
-      await refreshShotWorkflow(selected.id);
-      setGenerationNotice(
-        `Generated with ${result.model} · ${result.referenceCount} reference${result.referenceCount === 1 ? "" : "s"} · ${(result.durationMs / 1000).toFixed(1)}s`,
-      );
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to generate shot image.");
-    } finally {
-      setGeneratingShotImage(false);
-    }
-  }
-
   async function handleShotFrameUpload(file: File) {
     if (!session || !project || !selected) return;
     setUploadingShotFrame(true);
@@ -443,7 +472,6 @@ export default function Home() {
   async function handleShotFrameDelete(frame: ShotFrame) {
     setDeletingShotFrameId(frame.id);
     setError("");
-
     try {
       await deleteShotFrameRecord(frame);
       await refreshShotWorkflow(frame.shot_id);
@@ -454,17 +482,79 @@ export default function Home() {
     }
   }
 
-  if (booting) {
-    return <LoadingScreen label="Connecting to Continuity Studio…" />;
+  async function handleVideoUpload(file: File, metadata: VideoUploadMetadata) {
+    if (!session || !project || !selected) return;
+    if (!currentCanonFrame) {
+      setError("Make a frame canon before uploading a video take.");
+      return;
+    }
+
+    setUploadingVideoTake(true);
+    setError("");
+    try {
+      await uploadShotVideoTake({
+        file,
+        userId: session.user.id,
+        projectId: project.id,
+        shotId: selected.id,
+        sourceFrameId: currentCanonFrame.id,
+        previousVideoTakeId: previousCanonVideo?.id ?? null,
+        promptPackage: metadata.promptPackage,
+        directorAdjustment: metadata.directorAdjustment,
+        targetDurationSeconds: metadata.targetDurationSeconds,
+        motionIntensity: metadata.motionIntensity,
+        cameraMotion: metadata.cameraMotion,
+      });
+      await refreshVideoWorkflow(selected.id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to upload video take.");
+    } finally {
+      setUploadingVideoTake(false);
+    }
   }
 
-  if (!session) {
-    return <AuthScreen />;
+  async function handleVideoApprove(take: ShotVideoTake) {
+    setBusyVideoTakeId(take.id);
+    setError("");
+    try {
+      await approveShotVideoTake(take.id);
+      await refreshVideoWorkflow(take.shot_id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to approve video take.");
+    } finally {
+      setBusyVideoTakeId(null);
+    }
   }
 
-  if (loadingWorkspace && !project) {
-    return <LoadingScreen label="Building your film workspace…" />;
+  async function handleVideoCanon(take: ShotVideoTake) {
+    setBusyVideoTakeId(take.id);
+    setError("");
+    try {
+      await canonShotVideoTake(take.id);
+      await refreshVideoWorkflow(take.shot_id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to make video take canon.");
+    } finally {
+      setBusyVideoTakeId(null);
+    }
   }
+
+  async function handleVideoDelete(take: ShotVideoTake) {
+    setBusyVideoTakeId(take.id);
+    setError("");
+    try {
+      await deleteShotVideoTake(take);
+      await refreshVideoWorkflow(take.shot_id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to delete video take.");
+    } finally {
+      setBusyVideoTakeId(null);
+    }
+  }
+
+  if (booting) return <LoadingScreen label="Connecting to Continuity Studio…" />;
+  if (!session) return <AuthScreen />;
+  if (loadingWorkspace && !project) return <LoadingScreen label="Building your film workspace…" />;
 
   if (!project || !selected) {
     return (
@@ -521,7 +611,6 @@ export default function Home() {
         </header>
 
         {error ? <p className="workspace-error">{error}</p> : null}
-        {generationNotice ? <p className="generation-success">{generationNotice}</p> : null}
 
         <div className="workspace-grid">
           <section className="shot-panel">
@@ -550,10 +639,8 @@ export default function Home() {
             <GenerationPanel
               shotNumber={selected.shot_number}
               ready={continuityReady}
-              generating={generatingShotImage}
               referenceCount={selectedReferenceCount}
               hasPreviousCanon={Boolean(previousCanonFrame)}
-              onGenerate={handleGenerateShotImage}
             />
 
             <ShotFramePanel
@@ -566,6 +653,20 @@ export default function Home() {
               onDelete={handleShotFrameDelete}
               onApprove={handleShotFrameApprove}
               onCanon={handleShotFrameCanon}
+            />
+
+            <VideoWorkflowPanel
+              shotNumber={selected.shot_number}
+              ready={videoReady}
+              hasCanonFrame={Boolean(currentCanonFrame)}
+              hasPreviousCanonVideo={Boolean(previousCanonVideo)}
+              takes={selectedVideoTakes}
+              uploading={uploadingVideoTake}
+              busyTakeId={busyVideoTakeId}
+              onUpload={handleVideoUpload}
+              onApprove={handleVideoApprove}
+              onCanon={handleVideoCanon}
+              onDelete={handleVideoDelete}
             />
 
             <div className="shot-fields">
@@ -584,8 +685,9 @@ export default function Home() {
             </div>
 
             <div className="canon-row">
-              <span className={`shot-status-note ${selected.status}`}>
-                Frame status: {selected.status}
+              <span className={`shot-status-note ${selected.status}`}>Frame status: {selected.status}</span>
+              <span className={`shot-status-note ${currentCanonVideo ? "canon" : selectedVideoTakes.length ? "draft" : "planned"}`}>
+                Video: {currentCanonVideo ? "canon" : selectedVideoTakes.length ? "takes available" : "not started"}
               </span>
             </div>
           </section>
@@ -598,9 +700,7 @@ export default function Home() {
                   {continuityReady ? "READY" : "NEEDS REFS"}
                 </span>
               </div>
-              <p className="muted">
-                Recurring visual assets should have a reference image and be locked as canon before generation.
-              </p>
+              <p className="muted">Recurring visual assets should have a reference image and be locked as canon before generation.</p>
               <div className="rule-list">
                 {selectedAssets.map((item) => (
                   <div className="rule-row" key={item.id}>
@@ -608,9 +708,7 @@ export default function Home() {
                       {item.reference_image_url && item.lock_state === "canon" ? "✓" : "!"}
                     </span>
                     <span>{item.name}</span>
-                    <small>
-                      {!item.reference_image_url ? "needs ref" : item.lock_state === "canon" ? "canon ref" : "unlock"}
-                    </small>
+                    <small>{!item.reference_image_url ? "needs ref" : item.lock_state === "canon" ? "canon ref" : "unlock"}</small>
                   </div>
                 ))}
                 {!selectedAssets.length ? <p className="muted">No shot assets linked yet.</p> : null}
@@ -646,14 +744,12 @@ export default function Home() {
           <div className="timeline">
             {shots.map((shot) => {
               const primaryFrame = primaryFrameByShotId.get(shot.id);
+              const hasVideoCanon = videoTakes.some((take) => take.shot_id === shot.id && take.is_canon);
               return (
                 <button
                   key={shot.id}
                   className={`timeline-shot ${shot.status} ${shot.shot_number === selectedNumber ? "selected" : ""}`}
-                  onClick={() => {
-                    setSelectedNumber(shot.shot_number);
-                    setGenerationNotice("");
-                  }}
+                  onClick={() => setSelectedNumber(shot.shot_number)}
                 >
                   <span>{String(shot.shot_number).padStart(2, "0")}</span>
                   <div className="mini-frame">
@@ -661,7 +757,7 @@ export default function Home() {
                     <i />
                   </div>
                   <strong>{shot.title}</strong>
-                  <small>{shot.time_of_day}</small>
+                  <small>{shot.time_of_day}{hasVideoCanon ? " · video canon" : ""}</small>
                 </button>
               );
             })}
@@ -768,7 +864,7 @@ function AuthScreen() {
         </div>
         <span className="eyebrow">{mode === "signin" ? "SIGN IN" : "CREATE ACCOUNT"}</span>
         <h1 style={{ fontSize: 30, margin: "8px 0 8px" }}>{mode === "signin" ? "Open your film" : "Create your workspace"}</h1>
-        <p style={{ color: "#949aa8", marginTop: 0, marginBottom: 24 }}>Your characters, shots and continuity rules are now stored in Supabase.</p>
+        <p style={{ color: "#949aa8", marginTop: 0, marginBottom: 24 }}>Your characters, shots and continuity rules are stored in Supabase.</p>
         <label style={{ display: "grid", gap: 8, marginBottom: 16 }}>
           <span>Email</span>
           <input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} style={{ padding: "13px 14px", borderRadius: 10, border: "1px solid #303641", background: "#0f1218", color: "white" }} />
