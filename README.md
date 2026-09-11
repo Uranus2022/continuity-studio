@@ -1,52 +1,68 @@
 # Continuity Studio
 
-A prototype workspace for AI filmmaking where characters, locations, props, visual rules, and shot-level continuity can be locked before generation.
+Continuity Studio is an AI-filmmaking workspace built around **persistent story continuity**: characters, wardrobe, locations, props, shot state, and story rules can be locked before image/video generation.
 
-## MVP goal
+The demo project is **The Message From Tomorrow**, a 12-shot continuity test.
 
-Prove the workflow before paying for generation APIs:
+## Current MVP
 
-1. Create a film project.
-2. Define characters, locations and props.
-3. Lock assets as canon.
-4. Build shots against inherited continuity rules.
-5. Flag conflicts before image/video generation.
-6. Later route approved shots to image/video providers.
+The prototype now has a live Supabase backend:
 
-The included demo project is **The Message From Tomorrow**, based on a 12-shot short-film continuity test.
+- Email/password authentication
+- Per-user projects protected with Row Level Security
+- Persistent projects and shots
+- Character, location, wardrobe, and prop assets
+- Shot-to-asset relationships
+- Continuity rules
+- Canon / draft / planned states
+- Working **Lock as Canon** persistence
+- Automatic bootstrap of the 12-shot demo project after first sign-in
+- Provider interface ready for future image/video generation APIs
 
 ## Run locally
 
 Requires Node.js 22+.
 
+If you already cloned the project:
+
 ```bash
+git pull
 npm install
 npm run dev
 ```
 
-Then open `http://localhost:3000`.
+Then open:
 
-## Current prototype
+```text
+http://localhost:3000
+```
 
-- Interactive 12-shot timeline
-- Shot inspector
-- Story Bible for character/location/props
-- Continuity check panel
-- Canon / draft / planned shot states
-- Mock continuity rules
-- Responsive layout
+On first use, create an account in the app. If Supabase asks for email confirmation, confirm the email once and then sign in. The demo project is created automatically for that authenticated user.
 
-## Next build step
+## Supabase
 
-Replace mock data with Supabase tables and CRUD:
+The live MVP database includes:
 
-- projects
-- characters
-- locations
-- props
-- shots
-- continuity_rules
-- shot_assets
-- generations
+- `projects`
+- `assets`
+- `shots`
+- `shot_assets`
+- `continuity_rules`
+- `generations`
 
-Then add a provider adapter layer for image/video generation.
+RLS is enabled on all user-owned application tables.
+
+The browser app uses only the Supabase **publishable** key. Never put a Supabase service-role key or another server secret in client-side code or in GitHub.
+
+A reproducible database definition lives in `supabase/schema.sql`.
+
+## Next product milestone
+
+Move from persistence to generation workflow:
+
+1. Upload/reference canonical character and location images.
+2. Add a continuity-aware prompt compiler.
+3. Add pre-generation continuity validation.
+4. Connect the first image/video provider.
+5. Store generations and promote an approved output to canon.
+6. Add a timeline/export workflow.
