@@ -5,6 +5,8 @@ import type { Session } from "@supabase/supabase-js";
 import { useEffect, useMemo, useState } from "react";
 import { ShotFramePanel } from "@/components/shot-frame-panel";
 import {
+  approveShotFrame as approveShotFrameRecord,
+  canonShotFrame as canonShotFrameRecord,
   deleteShotFrame as deleteShotFrameRecord,
   listShotFrames,
   uploadShotFrame as uploadShotFrameFile,
@@ -36,7 +38,7 @@ type Shot = {
   camera: string | null;
   action: string | null;
   time_of_day: string | null;
-  status: "planned" | "draft" | "canon";
+  status: "planned" | "draft" | "approved" | "canon";
 };
 
 type Rule = {
@@ -71,11 +73,11 @@ export default function Home() {
   const [shotFrames, setShotFrames] = useState<ShotFrame[]>([]);
   const [assetPreviewUrls, setAssetPreviewUrls] = useState<Record<string, string>>({});
   const [selectedNumber, setSelectedNumber] = useState(3);
-  const [savingCanon, setSavingCanon] = useState(false);
   const [uploadingAssetId, setUploadingAssetId] = useState<string | null>(null);
   const [lockingAssetId, setLockingAssetId] = useState<string | null>(null);
   const [uploadingShotFrame, setUploadingShotFrame] = useState(false);
   const [deletingShotFrameId, setDeletingShotFrameId] = useState<string | null>(null);
+  const [updatingShotFrameId, setUpdatingShotFrameId] = useState<string | null>(null);
 
   async function refreshAssetPreviews(nextAssets: Asset[]) {
     const entries = await Promise.all(
@@ -91,6 +93,25 @@ export default function Home() {
 
     setAssetPreviewUrls(
       Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry))),
+    );
+  }
+
+  async function refreshShotWorkflow(shotId: string) {
+    const [frames, shotResult] = await Promise.all([
+      listShotFrames([shotId]),
+      supabase.from("shots").select("status").eq("id", shotId).single(),
+    ]);
+
+    if (shotResult.error) throw shotResult.error;
+
+    setShotFrames((current) => [
+      ...frames,
+      ...current.filter((frame) => frame.shot_id !== shotId),
+    ]);
+    setShots((current) =>
+      current.map((shot) =>
+        shot.id === shotId ? { ...shot, status: shotResult.data.status as Shot["status"] } : shot,
+      ),
     );
   }
 
@@ -214,12 +235,21 @@ export default function Home() {
     [selectedFrames],
   );
 
-  const latestFrameByShotId = useMemo(() => {
-    const map = new Map<string, ShotFrame>();
+  const primaryFrameByShotId = useMemo(() => {
+    const grouped = new Map<string, ShotFrame[]>();
     for (const frame of shotFrames) {
-      if (!map.has(frame.shot_id)) map.set(frame.shot_id, frame);
+      grouped.set(frame.shot_id, [...(grouped.get(frame.shot_id) ?? []), frame]);
     }
-    return map;
+
+    const result = new Map<string, ShotFrame>();
+    for (const [shotId, frames] of grouped) {
+      const primary =
+        frames.find((frame) => frame.is_canon) ??
+        frames.find((frame) => frame.is_approved) ??
+        [...frames].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+      if (primary) result.set(shotId, primary);
+    }
+    return result;
   }, [shotFrames]);
 
   const assetById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
@@ -247,26 +277,6 @@ export default function Home() {
           (selected.shot_number >= rule.start_shot && selected.shot_number <= rule.end_shot),
       )
     : [];
-
-  async function lockAsCanon() {
-    if (!selected || selected.status === "canon") return;
-    setSavingCanon(true);
-    setError("");
-
-    const { error: updateError } = await supabase
-      .from("shots")
-      .update({ status: "canon" })
-      .eq("id", selected.id);
-
-    if (updateError) {
-      setError(updateError.message);
-    } else {
-      setShots((current) =>
-        current.map((shot) => (shot.id === selected.id ? { ...shot, status: "canon" } : shot)),
-      );
-    }
-    setSavingCanon(false);
-  }
 
   async function uploadReference(asset: Asset, file: File) {
     if (!session || !project) return;
@@ -348,17 +358,43 @@ export default function Home() {
     setError("");
 
     try {
-      const frame = await uploadShotFrameFile({
+      await uploadShotFrameFile({
         file,
         userId: session.user.id,
         projectId: project.id,
         shotId: selected.id,
       });
-      setShotFrames((current) => [frame, ...current]);
+      await refreshShotWorkflow(selected.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to upload shot frame.");
     } finally {
       setUploadingShotFrame(false);
+    }
+  }
+
+  async function handleShotFrameApprove(frame: ShotFrame) {
+    setUpdatingShotFrameId(frame.id);
+    setError("");
+    try {
+      await approveShotFrameRecord(frame.id);
+      await refreshShotWorkflow(frame.shot_id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to approve shot frame.");
+    } finally {
+      setUpdatingShotFrameId(null);
+    }
+  }
+
+  async function handleShotFrameCanon(frame: ShotFrame) {
+    setUpdatingShotFrameId(frame.id);
+    setError("");
+    try {
+      await canonShotFrameRecord(frame.id);
+      await refreshShotWorkflow(frame.shot_id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to make shot frame canon.");
+    } finally {
+      setUpdatingShotFrameId(null);
     }
   }
 
@@ -368,7 +404,7 @@ export default function Home() {
 
     try {
       await deleteShotFrameRecord(frame);
-      setShotFrames((current) => current.filter((item) => item.id !== frame.id));
+      await refreshShotWorkflow(frame.shot_id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to delete shot frame.");
     } finally {
@@ -473,8 +509,11 @@ export default function Home() {
               frames={selectedFrames}
               uploading={uploadingShotFrame}
               deletingFrameId={deletingShotFrameId}
+              updatingFrameId={updatingShotFrameId}
               onUpload={handleShotFrameUpload}
               onDelete={handleShotFrameDelete}
+              onApprove={handleShotFrameApprove}
+              onCanon={handleShotFrameCanon}
             />
 
             <div className="shot-fields">
@@ -494,13 +533,9 @@ export default function Home() {
 
             <div className="canon-row">
               <button className="secondary-button">Preview Prompt</button>
-              <button
-                className="canon-button"
-                onClick={() => void lockAsCanon()}
-                disabled={savingCanon || selected.status === "canon"}
-              >
-                {selected.status === "canon" ? "◆ Canon locked" : savingCanon ? "Locking…" : "◆ Lock as Canon"}
-              </button>
+              <span className={`shot-status-note ${selected.status}`}>
+                Frame status: {selected.status}
+              </span>
             </div>
           </section>
 
@@ -550,11 +585,16 @@ export default function Home() {
         <section className="timeline-section">
           <div className="timeline-heading">
             <div><span className="eyebrow">TIMELINE</span><strong>{shots.length} shots</strong></div>
-            <span className="timeline-legend"><i className="canon-dot" /> canon <i className="draft-dot" /> draft <i className="planned-dot" /> planned</span>
+            <span className="timeline-legend">
+              <i className="canon-dot" /> canon
+              <i className="approved-dot" /> approved
+              <i className="draft-dot" /> draft
+              <i className="planned-dot" /> planned
+            </span>
           </div>
           <div className="timeline">
             {shots.map((shot) => {
-              const latestFrame = latestFrameByShotId.get(shot.id);
+              const primaryFrame = primaryFrameByShotId.get(shot.id);
               return (
                 <button
                   key={shot.id}
@@ -563,7 +603,7 @@ export default function Home() {
                 >
                   <span>{String(shot.shot_number).padStart(2, "0")}</span>
                   <div className="mini-frame">
-                    {latestFrame?.signed_url ? <img src={latestFrame.signed_url} alt="" /> : null}
+                    {primaryFrame?.signed_url ? <img src={primaryFrame.signed_url} alt="" /> : null}
                     <i />
                   </div>
                   <strong>{shot.title}</strong>
