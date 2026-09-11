@@ -82,9 +82,18 @@ export function ShotFramePanel({
                   </div>
                 </div>
 
-                <div className="shot-frame-actions">
+                <div
+                  className="shot-frame-actions"
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+                    gap: 6,
+                    padding: "0 8px 8px",
+                  }}
+                >
                   <button
                     className={`shot-frame-action approve ${frame.is_approved ? "active" : ""}`}
+                    style={{ minWidth: 0, width: "100%" }}
                     disabled={busy || frame.is_approved || frame.is_canon}
                     onClick={() => void onApprove(frame)}
                   >
@@ -92,6 +101,7 @@ export function ShotFramePanel({
                   </button>
                   <button
                     className={`shot-frame-action canon ${frame.is_canon ? "active" : ""}`}
+                    style={{ minWidth: 0, width: "100%" }}
                     disabled={busy || frame.is_canon}
                     onClick={() => void onCanon(frame)}
                   >
@@ -99,6 +109,7 @@ export function ShotFramePanel({
                   </button>
                   <button
                     className="shot-frame-delete"
+                    style={{ gridColumn: "1 / -1", width: "100%" }}
                     disabled={busy}
                     onClick={() => void onDelete(frame)}
                     title="Delete frame"
