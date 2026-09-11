@@ -1,6 +1,6 @@
 "use client";
 
-import type { FormEvent, ReactNode } from "react";
+import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
@@ -18,6 +18,7 @@ type Asset = {
   name: string;
   description: string | null;
   lock_state: "draft" | "canon";
+  reference_image_url: string | null;
 };
 
 type Shot = {
@@ -44,6 +45,10 @@ type ShotAsset = {
   role: string | null;
 };
 
+const STORAGE_BUCKET = "canon-references";
+const MAX_REFERENCE_BYTES = 10 * 1024 * 1024;
+const ALLOWED_REFERENCE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
 const Icon = ({ children }: { children: ReactNode }) => <span className="icon">{children}</span>;
 
 export default function Home() {
@@ -56,8 +61,28 @@ export default function Home() {
   const [shots, setShots] = useState<Shot[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
   const [shotAssets, setShotAssets] = useState<ShotAsset[]>([]);
+  const [assetPreviewUrls, setAssetPreviewUrls] = useState<Record<string, string>>({});
   const [selectedNumber, setSelectedNumber] = useState(3);
   const [savingCanon, setSavingCanon] = useState(false);
+  const [uploadingAssetId, setUploadingAssetId] = useState<string | null>(null);
+  const [lockingAssetId, setLockingAssetId] = useState<string | null>(null);
+
+  async function refreshAssetPreviews(nextAssets: Asset[]) {
+    const entries = await Promise.all(
+      nextAssets.map(async (asset) => {
+        if (!asset.reference_image_url) return null;
+        const { data, error: signedUrlError } = await supabase.storage
+          .from(STORAGE_BUCKET)
+          .createSignedUrl(asset.reference_image_url, 60 * 60);
+        if (signedUrlError || !data?.signedUrl) return null;
+        return [asset.id, data.signedUrl] as const;
+      }),
+    );
+
+    setAssetPreviewUrls(
+      Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry))),
+    );
+  }
 
   async function loadWorkspace() {
     setLoadingWorkspace(true);
@@ -77,7 +102,7 @@ export default function Home() {
           .order("shot_number"),
         supabase
           .from("assets")
-          .select("id,kind,name,description,lock_state")
+          .select("id,kind,name,description,lock_state,reference_image_url")
           .eq("project_id", projectId)
           .order("kind")
           .order("name"),
@@ -94,6 +119,7 @@ export default function Home() {
       if (ruleResult.error) throw ruleResult.error;
 
       const nextShots = (shotResult.data ?? []) as Shot[];
+      const nextAssets = (assetResult.data ?? []) as Asset[];
       const shotIds = nextShots.map((shot) => shot.id);
       let links: ShotAsset[] = [];
 
@@ -108,9 +134,10 @@ export default function Home() {
 
       setProject(projectResult.data as Project);
       setShots(nextShots);
-      setAssets((assetResult.data ?? []) as Asset[]);
+      setAssets(nextAssets);
       setRules((ruleResult.data ?? []) as Rule[]);
       setShotAssets(links);
+      await refreshAssetPreviews(nextAssets);
 
       if (!nextShots.some((shot) => shot.shot_number === selectedNumber)) {
         setSelectedNumber(nextShots[0]?.shot_number ?? 1);
@@ -143,6 +170,7 @@ export default function Home() {
         setAssets([]);
         setRules([]);
         setShotAssets([]);
+        setAssetPreviewUrls({});
       }
     });
 
@@ -160,13 +188,17 @@ export default function Home() {
   );
 
   const assetById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
-  const selectedAssetNames = useMemo(() => {
+  const selectedAssets = useMemo(() => {
     if (!selected) return [];
     return shotAssets
       .filter((link) => link.shot_id === selected.id)
-      .map((link) => assetById.get(link.asset_id)?.name)
-      .filter((name): name is string => Boolean(name));
+      .map((link) => assetById.get(link.asset_id))
+      .filter((asset): asset is Asset => Boolean(asset));
   }, [selected, shotAssets, assetById]);
+
+  const missingReferences = selectedAssets.filter((asset) => !asset.reference_image_url);
+  const unlockedAssets = selectedAssets.filter((asset) => asset.lock_state !== "canon");
+  const continuityReady = selectedAssets.length > 0 && missingReferences.length === 0 && unlockedAssets.length === 0;
 
   const characters = assets.filter((asset) => asset.kind === "character");
   const locations = assets.filter((asset) => asset.kind === "location");
@@ -199,6 +231,80 @@ export default function Home() {
       );
     }
     setSavingCanon(false);
+  }
+
+  async function uploadReference(asset: Asset, file: File) {
+    if (!session || !project) return;
+    setError("");
+
+    if (!ALLOWED_REFERENCE_TYPES.has(file.type)) {
+      setError("Reference images must be JPEG, PNG, or WebP.");
+      return;
+    }
+    if (file.size > MAX_REFERENCE_BYTES) {
+      setError("Reference images must be 10 MB or smaller.");
+      return;
+    }
+
+    setUploadingAssetId(asset.id);
+
+    try {
+      const extension = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
+      const path = `${session.user.id}/${project.id}/${asset.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
+
+      const { error: uploadError } = await supabase.storage.from(STORAGE_BUCKET).upload(path, file, {
+        cacheControl: "3600",
+        contentType: file.type,
+        upsert: false,
+      });
+      if (uploadError) throw uploadError;
+
+      const { error: updateError } = await supabase
+        .from("assets")
+        .update({ reference_image_url: path })
+        .eq("id", asset.id);
+
+      if (updateError) {
+        await supabase.storage.from(STORAGE_BUCKET).remove([path]);
+        throw updateError;
+      }
+
+      if (asset.reference_image_url) {
+        await supabase.storage.from(STORAGE_BUCKET).remove([asset.reference_image_url]);
+      }
+
+      const updatedAsset = { ...asset, reference_image_url: path };
+      setAssets((current) => current.map((item) => (item.id === asset.id ? updatedAsset : item)));
+
+      const { data: signedData } = await supabase.storage.from(STORAGE_BUCKET).createSignedUrl(path, 60 * 60);
+      if (signedData?.signedUrl) {
+        setAssetPreviewUrls((current) => ({ ...current, [asset.id]: signedData.signedUrl }));
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to upload reference image.");
+    } finally {
+      setUploadingAssetId(null);
+    }
+  }
+
+  async function lockAssetAsCanon(asset: Asset) {
+    if (asset.lock_state === "canon") return;
+    setLockingAssetId(asset.id);
+    setError("");
+
+    const { error: updateError } = await supabase
+      .from("assets")
+      .update({ lock_state: "canon" })
+      .eq("id", asset.id);
+
+    if (updateError) {
+      setError(updateError.message);
+    } else {
+      setAssets((current) =>
+        current.map((item) => (item.id === asset.id ? { ...item, lock_state: "canon" } : item)),
+      );
+    }
+    setLockingAssetId(null);
   }
 
   if (booting) {
@@ -267,7 +373,7 @@ export default function Home() {
           </div>
         </header>
 
-        {error ? <p style={{ color: "#ff9b9b", margin: "0 0 16px" }}>{error}</p> : null}
+        {error ? <p className="workspace-error">{error}</p> : null}
 
         <div className="workspace-grid">
           <section className="shot-panel">
@@ -319,22 +425,38 @@ export default function Home() {
 
           <aside className="inspector">
             <div className="inspector-card">
-              <div className="card-title"><span>Continuity Check</span><span className="pass-pill">PASS</span></div>
-              <p className="muted">Assets and story rules inherited for this shot.</p>
+              <div className="card-title">
+                <span>Continuity Check</span>
+                <span className={`pass-pill ${continuityReady ? "" : "warn"}`}>
+                  {continuityReady ? "READY" : "NEEDS REFS"}
+                </span>
+              </div>
+              <p className="muted">
+                Recurring visual assets should have a reference image and be locked as canon before generation.
+              </p>
               <div className="rule-list">
-                {selectedAssetNames.map((item) => (
-                  <div className="rule-row" key={item}><span className="check">✓</span><span>{item}</span><small>linked</small></div>
+                {selectedAssets.map((item) => (
+                  <div className="rule-row" key={item.id}>
+                    <span className={item.reference_image_url && item.lock_state === "canon" ? "check" : "warning-mark"}>
+                      {item.reference_image_url && item.lock_state === "canon" ? "✓" : "!"}
+                    </span>
+                    <span>{item.name}</span>
+                    <small>
+                      {!item.reference_image_url ? "needs ref" : item.lock_state === "canon" ? "canon ref" : "unlock"}
+                    </small>
+                  </div>
                 ))}
-                {!selectedAssetNames.length ? <p className="muted">No shot assets linked yet.</p> : null}
+                {!selectedAssets.length ? <p className="muted">No shot assets linked yet.</p> : null}
               </div>
             </div>
 
             <div className="inspector-card">
               <div className="card-title"><span>Story Bible</span><span>⌘</span></div>
-              <BibleGroup title="CHARACTER" items={characters} />
-              <BibleGroup title="LOCATION" items={locations} />
-              <BibleGroup title="WARDROBE" items={wardrobe} />
-              <BibleGroup title="PROPS" items={props} />
+              <p className="muted">Upload one trusted visual reference per recurring asset. References are private.</p>
+              <BibleGroup title="CHARACTER" items={characters} previewUrls={assetPreviewUrls} uploadingAssetId={uploadingAssetId} lockingAssetId={lockingAssetId} onUpload={uploadReference} onLock={lockAssetAsCanon} />
+              <BibleGroup title="LOCATION" items={locations} previewUrls={assetPreviewUrls} uploadingAssetId={uploadingAssetId} lockingAssetId={lockingAssetId} onUpload={uploadReference} onLock={lockAssetAsCanon} />
+              <BibleGroup title="WARDROBE" items={wardrobe} previewUrls={assetPreviewUrls} uploadingAssetId={uploadingAssetId} lockingAssetId={lockingAssetId} onUpload={uploadReference} onLock={lockAssetAsCanon} />
+              <BibleGroup title="PROPS" items={props} previewUrls={assetPreviewUrls} uploadingAssetId={uploadingAssetId} lockingAssetId={lockingAssetId} onUpload={uploadReference} onLock={lockAssetAsCanon} />
             </div>
 
             <div className="inspector-card rules-card">
@@ -369,17 +491,53 @@ export default function Home() {
   );
 }
 
-function BibleGroup({ title, items }: { title: string; items: Asset[] }) {
+type BibleGroupProps = {
+  title: string;
+  items: Asset[];
+  previewUrls: Record<string, string>;
+  uploadingAssetId: string | null;
+  lockingAssetId: string | null;
+  onUpload: (asset: Asset, file: File) => Promise<void>;
+  onLock: (asset: Asset) => Promise<void>;
+};
+
+function BibleGroup({ title, items, previewUrls, uploadingAssetId, lockingAssetId, onUpload, onLock }: BibleGroupProps) {
   if (!items.length) return null;
+
+  function chooseReference(asset: Asset, event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.currentTarget.value = "";
+    if (file) void onUpload(asset, file);
+  }
+
   return (
     <div className="bible-group">
       <span className="eyebrow">{title}</span>
       {items.map((item) => (
-        <button key={item.id} title={item.description ?? item.name}>
-          <span className="asset-thumb" />
-          {item.name}
-          <span className="lock">{item.lock_state === "canon" ? "◆" : "◇"}</span>
-        </button>
+        <div className="bible-asset" key={item.id} title={item.description ?? item.name}>
+          {previewUrls[item.id] ? (
+            <img className="asset-thumb asset-thumb-image" src={previewUrls[item.id]} alt={`${item.name} reference`} />
+          ) : (
+            <span className="asset-thumb" />
+          )}
+          <div className="asset-copy">
+            <strong>{item.name}</strong>
+            <small>{item.reference_image_url ? "Reference attached" : "No reference yet"}</small>
+          </div>
+          <div className="asset-actions">
+            <label className="asset-upload-button">
+              {uploadingAssetId === item.id ? "Uploading…" : item.reference_image_url ? "Replace" : "Upload"}
+              <input type="file" accept="image/jpeg,image/png,image/webp" disabled={uploadingAssetId === item.id} onChange={(event) => chooseReference(item, event)} />
+            </label>
+            <button
+              className={`asset-lock-button ${item.lock_state === "canon" ? "locked" : ""}`}
+              disabled={item.lock_state === "canon" || lockingAssetId === item.id}
+              onClick={() => void onLock(item)}
+            >
+              {item.lock_state === "canon" ? "◆" : lockingAssetId === item.id ? "…" : "◇"}
+            </button>
+          </div>
+        </div>
       ))}
     </div>
   );
@@ -409,11 +567,7 @@ function AuthScreen() {
     setMessage("");
 
     if (mode === "signup") {
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: { emailRedirectTo: window.location.origin },
-      });
+      const { data, error } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo: window.location.origin } });
       if (error) setMessage(error.message);
       else if (!data.session) setMessage("Account created. Check your email once to confirm it, then sign in here.");
     } else {
@@ -426,49 +580,27 @@ function AuthScreen() {
 
   return (
     <main style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24, background: "#0d0f14", color: "white" }}>
-      <form
-        onSubmit={submit}
-        style={{ width: "min(440px, 100%)", border: "1px solid #252a34", borderRadius: 20, background: "#151820", padding: 28, boxShadow: "0 24px 70px rgba(0,0,0,.35)" }}
-      >
+      <form onSubmit={submit} style={{ width: "min(440px, 100%)", border: "1px solid #252a34", borderRadius: 20, background: "#151820", padding: 28, boxShadow: "0 24px 70px rgba(0,0,0,.35)" }}>
         <div className="brand" style={{ marginBottom: 28 }}>
           <div className="brand-mark">C</div>
           <div><strong>Continuity Studio</strong><span>Persistent film workspace</span></div>
         </div>
         <span className="eyebrow">{mode === "signin" ? "SIGN IN" : "CREATE ACCOUNT"}</span>
         <h1 style={{ fontSize: 30, margin: "8px 0 8px" }}>{mode === "signin" ? "Open your film" : "Create your workspace"}</h1>
-        <p style={{ color: "#949aa8", marginTop: 0, marginBottom: 24 }}>
-          Your characters, shots and continuity rules are now stored in Supabase.
-        </p>
+        <p style={{ color: "#949aa8", marginTop: 0, marginBottom: 24 }}>Your characters, shots and continuity rules are now stored in Supabase.</p>
         <label style={{ display: "grid", gap: 8, marginBottom: 16 }}>
           <span>Email</span>
-          <input
-            type="email"
-            required
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            style={{ padding: "13px 14px", borderRadius: 10, border: "1px solid #303641", background: "#0f1218", color: "white" }}
-          />
+          <input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} style={{ padding: "13px 14px", borderRadius: 10, border: "1px solid #303641", background: "#0f1218", color: "white" }} />
         </label>
         <label style={{ display: "grid", gap: 8, marginBottom: 20 }}>
           <span>Password</span>
-          <input
-            type="password"
-            minLength={6}
-            required
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            style={{ padding: "13px 14px", borderRadius: 10, border: "1px solid #303641", background: "#0f1218", color: "white" }}
-          />
+          <input type="password" minLength={6} required value={password} onChange={(event) => setPassword(event.target.value)} style={{ padding: "13px 14px", borderRadius: 10, border: "1px solid #303641", background: "#0f1218", color: "white" }} />
         </label>
         {message ? <p style={{ color: message.startsWith("Account created") ? "#8fe3b0" : "#ff9b9b", lineHeight: 1.5 }}>{message}</p> : null}
         <button className="primary-button" type="submit" disabled={working} style={{ width: "100%", justifyContent: "center" }}>
           {working ? "Working…" : mode === "signin" ? "Sign in" : "Create account"}
         </button>
-        <button
-          type="button"
-          onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setMessage(""); }}
-          style={{ width: "100%", marginTop: 12, border: 0, background: "transparent", color: "#aeb5c2", cursor: "pointer", padding: 10 }}
-        >
+        <button type="button" onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setMessage(""); }} style={{ width: "100%", marginTop: 12, border: 0, background: "transparent", color: "#aeb5c2", cursor: "pointer", padding: 10 }}>
           {mode === "signin" ? "First time? Create an account" : "Already have an account? Sign in"}
         </button>
       </form>
