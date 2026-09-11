@@ -1,0 +1,89 @@
+"use client";
+
+import type { ChangeEvent } from "react";
+import type { ShotFrame } from "@/lib/shot-frames";
+
+type ShotFramePanelProps = {
+  shotNumber: number;
+  frames: ShotFrame[];
+  uploading: boolean;
+  deletingFrameId: string | null;
+  onUpload: (file: File) => Promise<void>;
+  onDelete: (frame: ShotFrame) => Promise<void>;
+};
+
+export function ShotFramePanel({
+  shotNumber,
+  frames,
+  uploading,
+  deletingFrameId,
+  onUpload,
+  onDelete,
+}: ShotFramePanelProps) {
+  function chooseFrame(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.currentTarget.value = "";
+    if (file) void onUpload(file);
+  }
+
+  return (
+    <section className="shot-frames-card">
+      <div className="shot-frames-header">
+        <div>
+          <span className="eyebrow">SHOT {String(shotNumber).padStart(2, "0")} FRAMES</span>
+          <strong>Visual history</strong>
+          <p>Keep alternate renders here before choosing an approved or canon frame.</p>
+        </div>
+        <label className="shot-frame-upload-button">
+          {uploading ? "Uploading…" : "＋ Upload frame"}
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            disabled={uploading}
+            onChange={chooseFrame}
+          />
+        </label>
+      </div>
+
+      {!frames.length ? (
+        <div className="shot-frames-empty">
+          <span>▧</span>
+          <strong>No frames yet</strong>
+          <small>Upload the first rendered or reference frame for this shot.</small>
+        </div>
+      ) : (
+        <div className="shot-frame-grid">
+          {frames.map((frame, index) => (
+            <article className="shot-frame-item" key={frame.id}>
+              <div className="shot-frame-image-wrap">
+                {frame.signed_url ? (
+                  <img src={frame.signed_url} alt={frame.file_name || `Shot ${shotNumber} frame`} />
+                ) : (
+                  <div className="shot-frame-no-preview">Preview unavailable</div>
+                )}
+                <div className="shot-frame-badges">
+                  {frame.is_canon ? <span className="frame-badge canon">CANON</span> : null}
+                  {frame.is_approved ? <span className="frame-badge approved">APPROVED</span> : null}
+                </div>
+              </div>
+              <div className="shot-frame-meta">
+                <div>
+                  <strong>{frame.label || `Frame ${frames.length - index}`}</strong>
+                  <small>{new Date(frame.created_at).toLocaleString()}</small>
+                </div>
+                <button
+                  className="shot-frame-delete"
+                  disabled={deletingFrameId === frame.id}
+                  onClick={() => void onDelete(frame)}
+                  title="Delete frame"
+                >
+                  {deletingFrameId === frame.id ? "…" : "Delete"}
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
