@@ -3,7 +3,9 @@
 import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { useEffect, useMemo, useState } from "react";
+import { GenerationPanel } from "@/components/generation-panel";
 import { ShotFramePanel } from "@/components/shot-frame-panel";
+import { generateShotImage, type GenerationQuality } from "@/lib/generations";
 import {
   approveShotFrame as approveShotFrameRecord,
   canonShotFrame as canonShotFrameRecord,
@@ -65,6 +67,7 @@ export default function Home() {
   const [booting, setBooting] = useState(true);
   const [loadingWorkspace, setLoadingWorkspace] = useState(false);
   const [error, setError] = useState("");
+  const [generationNotice, setGenerationNotice] = useState("");
   const [project, setProject] = useState<Project | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [shots, setShots] = useState<Shot[]>([]);
@@ -78,6 +81,7 @@ export default function Home() {
   const [uploadingShotFrame, setUploadingShotFrame] = useState(false);
   const [deletingShotFrameId, setDeletingShotFrameId] = useState<string | null>(null);
   const [updatingShotFrameId, setUpdatingShotFrameId] = useState<string | null>(null);
+  const [generatingShotImage, setGeneratingShotImage] = useState(false);
 
   async function refreshAssetPreviews(nextAssets: Asset[]) {
     const entries = await Promise.all(
@@ -235,6 +239,18 @@ export default function Home() {
     [selectedFrames],
   );
 
+  const previousShot = useMemo(() => {
+    if (!selected) return null;
+    return [...shots]
+      .filter((shot) => shot.shot_number < selected.shot_number)
+      .sort((a, b) => b.shot_number - a.shot_number)[0] ?? null;
+  }, [selected, shots]);
+
+  const previousCanonFrame = useMemo(
+    () => previousShot ? shotFrames.find((frame) => frame.shot_id === previousShot.id && frame.is_canon) ?? null : null,
+    [previousShot, shotFrames],
+  );
+
   const primaryFrameByShotId = useMemo(() => {
     const grouped = new Map<string, ShotFrame[]>();
     for (const frame of shotFrames) {
@@ -264,6 +280,9 @@ export default function Home() {
   const missingReferences = selectedAssets.filter((asset) => !asset.reference_image_url);
   const unlockedAssets = selectedAssets.filter((asset) => asset.lock_state !== "canon");
   const continuityReady = selectedAssets.length > 0 && missingReferences.length === 0 && unlockedAssets.length === 0;
+  const selectedReferenceCount = selectedAssets.filter(
+    (asset) => asset.reference_image_url && asset.lock_state === "canon",
+  ).length;
 
   const characters = assets.filter((asset) => asset.kind === "character");
   const locations = assets.filter((asset) => asset.kind === "location");
@@ -350,6 +369,29 @@ export default function Home() {
       );
     }
     setLockingAssetId(null);
+  }
+
+  async function handleGenerateShotImage(directorNote: string, quality: GenerationQuality) {
+    if (!selected) return;
+    setGeneratingShotImage(true);
+    setError("");
+    setGenerationNotice("");
+
+    try {
+      const result = await generateShotImage({
+        shotId: selected.id,
+        directorNote,
+        quality,
+      });
+      await refreshShotWorkflow(selected.id);
+      setGenerationNotice(
+        `Generated with ${result.model} · ${result.referenceCount} reference${result.referenceCount === 1 ? "" : "s"} · ${(result.durationMs / 1000).toFixed(1)}s`,
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to generate shot image.");
+    } finally {
+      setGeneratingShotImage(false);
+    }
   }
 
   async function handleShotFrameUpload(file: File) {
@@ -479,6 +521,7 @@ export default function Home() {
         </header>
 
         {error ? <p className="workspace-error">{error}</p> : null}
+        {generationNotice ? <p className="generation-success">{generationNotice}</p> : null}
 
         <div className="workspace-grid">
           <section className="shot-panel">
@@ -503,6 +546,15 @@ export default function Home() {
                 </div>
               </div>
             </div>
+
+            <GenerationPanel
+              shotNumber={selected.shot_number}
+              ready={continuityReady}
+              generating={generatingShotImage}
+              referenceCount={selectedReferenceCount}
+              hasPreviousCanon={Boolean(previousCanonFrame)}
+              onGenerate={handleGenerateShotImage}
+            />
 
             <ShotFramePanel
               shotNumber={selected.shot_number}
@@ -532,7 +584,6 @@ export default function Home() {
             </div>
 
             <div className="canon-row">
-              <button className="secondary-button">Preview Prompt</button>
               <span className={`shot-status-note ${selected.status}`}>
                 Frame status: {selected.status}
               </span>
@@ -599,7 +650,10 @@ export default function Home() {
                 <button
                   key={shot.id}
                   className={`timeline-shot ${shot.status} ${shot.shot_number === selectedNumber ? "selected" : ""}`}
-                  onClick={() => setSelectedNumber(shot.shot_number)}
+                  onClick={() => {
+                    setSelectedNumber(shot.shot_number);
+                    setGenerationNotice("");
+                  }}
                 >
                   <span>{String(shot.shot_number).padStart(2, "0")}</span>
                   <div className="mini-frame">
