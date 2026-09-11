@@ -76,6 +76,10 @@ export function VideoWorkflowPanel({
     }
   }
 
+  function openChatGPT() {
+    window.open("https://chatgpt.com/", "_blank", "noopener,noreferrer");
+  }
+
   function chooseVideo(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.currentTarget.value = "";
@@ -165,6 +169,9 @@ export function VideoWorkflowPanel({
       <div className="video-package-actions">
         <button className="video-copy-button" disabled={!ready || working} onClick={() => void copyVideoPackage()}>
           {working ? "Preparing…" : copyState === "copied" ? "✓ Video prompt copied" : copyState === "failed" ? "Try again" : "Copy video prompt package"}
+        </button>
+        <button className="open-chatgpt-button" disabled={!ready} onClick={openChatGPT}>
+          Open ChatGPT ↗
         </button>
         <label className={`video-upload-button ${!hasCanonFrame || uploading ? "disabled" : ""}`}>
           {uploading ? "Uploading take…" : "＋ Upload video take"}
