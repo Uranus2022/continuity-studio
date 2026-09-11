@@ -1,12 +1,12 @@
 # Continuity Studio
 
-Continuity Studio is an AI-filmmaking workspace built around **persistent story continuity**: characters, wardrobe, locations, props, shot state, story rules, visual history, and AI-generated frames can be managed in one place.
+Continuity Studio is an AI-filmmaking workspace built around **persistent story continuity**: characters, wardrobe, locations, props, shot state, story rules, and visual history can be managed in one place.
 
 The demo project is **The Message From Tomorrow**, a 12-shot continuity test.
 
 ## Current MVP
 
-The prototype now has a live Supabase backend and Phase 3 image generation:
+The prototype now has a live Supabase backend and a no-API Phase 3 generation workflow:
 
 - Email/password authentication
 - Per-user projects protected with Row Level Security
@@ -18,11 +18,12 @@ The prototype now has a live Supabase backend and Phase 3 image generation:
 - Shot visual history
 - Frame approval and canon promotion
 - Automatic shot state sync: planned → draft → approved → canon
-- AI frame generation through a private Supabase Edge Function
-- Canon asset references are automatically sent with generation requests
-- Previous canon shot frame is inherited when available
-- Generated images are stored directly in the shot's Visual History
-- Generation records are stored in `generations`
+- No-API continuity prompt compiler
+- Canon Story Bible assets are automatically included in the prompt package
+- Previous canon shot frame is included in the reference checklist when available
+- Optional director adjustment per shot
+- One-click prompt copy and Open ChatGPT workflow
+- Generated images can be uploaded back into Visual History, then approved and promoted to canon
 
 ## Run locally
 
@@ -44,19 +45,20 @@ http://localhost:3000
 
 On first use, create an account in the app. If Supabase asks for email confirmation, confirm the email once and then sign in. The demo project is created automatically for that authenticated user.
 
-## Phase 3 provider setup
+## Phase 3: no-API workflow
 
-The deployed `generate-shot-image` Edge Function uses OpenAI GPT-Image-2.5 Flare.
+No OpenAI API key, API credits, or paid API account is required for the default workflow.
 
-The OpenAI API key is deliberately **not** stored in GitHub or browser code. Add it to the Supabase project's Edge Function secrets as:
+For a shot:
 
-```text
-OPENAI_API_KEY
-```
+1. Lock the required Story Bible assets as canon and attach their references.
+2. Click **Copy prompt package** in the No-API Generation panel.
+3. The app compiles the shot camera, time, action, visual style, canon assets, continuity rules, and previous canon frame context.
+4. Click **Open ChatGPT**, attach the references listed by Continuity Studio, paste the copied prompt, and generate one frame.
+5. Save the generated image and use **Upload frame** in Continuity Studio.
+6. Approve the best result and promote the final frame to canon.
 
-Do not prefix it with `NEXT_PUBLIC_` and do not put it in client-side code.
-
-Once the secret exists, the **Generate continuity frame** panel can create a new frame using the selected shot's canon Story Bible references and the previous canon shot frame when available.
+A previously deployed API generation Edge Function remains in the repository as an optional future provider path, but the app does not require or invoke it in the default Phase 3 workflow.
 
 ## Supabase
 
@@ -74,8 +76,8 @@ RLS is enabled on all user-owned application tables. Storage buckets for canon r
 
 The browser app uses only the Supabase publishable key. Never put a Supabase service-role key, OpenAI API key, or another server secret in client-side code or GitHub.
 
-Database migrations live in `supabase/migrations/`, and the deployed Edge Function source lives in `supabase/functions/generate-shot-image/`.
+Database migrations live in `supabase/migrations/`.
 
 ## Next milestone
 
-Phase 3 currently generates still frames. The next provider milestone is image-to-video generation while preserving the same shot, asset, canon, and generation history model.
+Improve the manual generation handoff: easier reference export/download, richer prompt previews, and image-to-video workflow while preserving the same shot, asset, canon, and visual-history model.
