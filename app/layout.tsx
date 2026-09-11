@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import "./phase2b.css";
+import "./generation.css";
 
 export const metadata: Metadata = {
   title: "Continuity Studio",
