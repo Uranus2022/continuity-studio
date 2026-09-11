@@ -1,16 +1,13 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { GenerationQuality } from "@/lib/generations";
 import { prepareManualGenerationPackage } from "@/lib/manual-generation-package";
 
 type GenerationPanelProps = {
   shotNumber: number;
   ready: boolean;
-  generating: boolean;
   referenceCount: number;
   hasPreviousCanon: boolean;
-  onGenerate: (directorNote: string, quality: GenerationQuality) => Promise<void>;
 };
 
 export function GenerationPanel({
