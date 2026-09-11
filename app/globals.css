@@ -100,6 +100,22 @@ h1 { margin: 4px 0 0; font-size: 20px; letter-spacing: -.02em; }
 .timeline-shot.canon .mini-frame i { background: var(--accent); }
 .timeline-shot.draft .mini-frame i { background: var(--accent-2); }
 
+.workspace-error { margin: 14px 30px 0; border: 1px solid #5a2d34; background: #241418; color: #ffb0b8; border-radius: 9px; padding: 10px 12px; font-size: 12px; }
+.pass-pill.warn { background: #241e0f; color: var(--warning); border-color: #51401d; }
+.warning-mark { color: var(--warning); font-weight: 900; }
+.bible-asset { width: 100%; background: #0e1015; border: 1px solid var(--line-soft); border-radius: 9px; padding: 8px; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; gap: 9px; align-items: center; margin-top: 6px; }
+.asset-thumb-image { object-fit: cover; border: 1px solid #39404d; }
+.asset-copy { min-width: 0; }
+.asset-copy strong { display: block; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.asset-copy small { display: block; color: #697181; font-size: 9px; margin-top: 3px; }
+.asset-actions { display: flex; gap: 5px; align-items: center; }
+.asset-upload-button, .asset-lock-button { border: 1px solid #303642; background: #171a21; color: #bdc2cc; border-radius: 7px; padding: 6px 7px; font-size: 9px; font-weight: 800; cursor: pointer; white-space: nowrap; }
+.asset-upload-button input { display: none; }
+.asset-upload-button:hover, .asset-lock-button:hover { border-color: #4b5363; color: white; }
+.asset-lock-button { width: 28px !important; padding-inline: 0 !important; color: #949aa8; display: inline-grid !important; grid-template-columns: 1fr !important; margin-top: 0 !important; }
+.asset-lock-button.locked { color: var(--accent); border-color: #3a451c; background: #161c0e; cursor: default; }
+.asset-lock-button:disabled { opacity: .65; cursor: default; }
+
 @media (max-width: 980px) {
   .app-shell { grid-template-columns: 74px minmax(0, 1fr); }
   .sidebar { padding: 20px 10px; }
