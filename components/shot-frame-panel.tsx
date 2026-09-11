@@ -8,8 +8,11 @@ type ShotFramePanelProps = {
   frames: ShotFrame[];
   uploading: boolean;
   deletingFrameId: string | null;
+  updatingFrameId: string | null;
   onUpload: (file: File) => Promise<void>;
   onDelete: (frame: ShotFrame) => Promise<void>;
+  onApprove: (frame: ShotFrame) => Promise<void>;
+  onCanon: (frame: ShotFrame) => Promise<void>;
 };
 
 export function ShotFramePanel({
@@ -17,8 +20,11 @@ export function ShotFramePanel({
   frames,
   uploading,
   deletingFrameId,
+  updatingFrameId,
   onUpload,
   onDelete,
+  onApprove,
+  onCanon,
 }: ShotFramePanelProps) {
   function chooseFrame(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -32,7 +38,7 @@ export function ShotFramePanel({
         <div>
           <span className="eyebrow">SHOT {String(shotNumber).padStart(2, "0")} FRAMES</span>
           <strong>Visual history</strong>
-          <p>Keep alternate renders here before choosing an approved or canon frame.</p>
+          <p>Keep alternate renders here, approve the best candidate, then lock the final continuity frame as canon.</p>
         </div>
         <label className="shot-frame-upload-button">
           {uploading ? "Uploading…" : "＋ Upload frame"}
@@ -53,35 +59,56 @@ export function ShotFramePanel({
         </div>
       ) : (
         <div className="shot-frame-grid">
-          {frames.map((frame, index) => (
-            <article className="shot-frame-item" key={frame.id}>
-              <div className="shot-frame-image-wrap">
-                {frame.signed_url ? (
-                  <img src={frame.signed_url} alt={frame.file_name || `Shot ${shotNumber} frame`} />
-                ) : (
-                  <div className="shot-frame-no-preview">Preview unavailable</div>
-                )}
-                <div className="shot-frame-badges">
-                  {frame.is_canon ? <span className="frame-badge canon">CANON</span> : null}
-                  {frame.is_approved ? <span className="frame-badge approved">APPROVED</span> : null}
+          {frames.map((frame, index) => {
+            const busy = deletingFrameId === frame.id || updatingFrameId === frame.id;
+            return (
+              <article className={`shot-frame-item ${frame.is_canon ? "is-canon" : frame.is_approved ? "is-approved" : ""}`} key={frame.id}>
+                <div className="shot-frame-image-wrap">
+                  {frame.signed_url ? (
+                    <img src={frame.signed_url} alt={frame.file_name || `Shot ${shotNumber} frame`} />
+                  ) : (
+                    <div className="shot-frame-no-preview">Preview unavailable</div>
+                  )}
+                  <div className="shot-frame-badges">
+                    {frame.is_canon ? <span className="frame-badge canon">CANON</span> : null}
+                    {!frame.is_canon && frame.is_approved ? <span className="frame-badge approved">APPROVED</span> : null}
+                  </div>
                 </div>
-              </div>
-              <div className="shot-frame-meta">
-                <div>
-                  <strong>{frame.label || `Frame ${frames.length - index}`}</strong>
-                  <small>{new Date(frame.created_at).toLocaleString()}</small>
+
+                <div className="shot-frame-meta">
+                  <div>
+                    <strong>{frame.label || `Frame ${frames.length - index}`}</strong>
+                    <small>{new Date(frame.created_at).toLocaleString()}</small>
+                  </div>
                 </div>
-                <button
-                  className="shot-frame-delete"
-                  disabled={deletingFrameId === frame.id}
-                  onClick={() => void onDelete(frame)}
-                  title="Delete frame"
-                >
-                  {deletingFrameId === frame.id ? "…" : "Delete"}
-                </button>
-              </div>
-            </article>
-          ))}
+
+                <div className="shot-frame-actions">
+                  <button
+                    className={`shot-frame-action approve ${frame.is_approved ? "active" : ""}`}
+                    disabled={busy || frame.is_approved || frame.is_canon}
+                    onClick={() => void onApprove(frame)}
+                  >
+                    {updatingFrameId === frame.id ? "…" : frame.is_approved ? "Approved" : "Approve"}
+                  </button>
+                  <button
+                    className={`shot-frame-action canon ${frame.is_canon ? "active" : ""}`}
+                    disabled={busy || frame.is_canon}
+                    onClick={() => void onCanon(frame)}
+                  >
+                    {updatingFrameId === frame.id ? "…" : frame.is_canon ? "◆ Canon" : "Make Canon"}
+                  </button>
+                  <button
+                    className="shot-frame-delete"
+                    disabled={busy}
+                    onClick={() => void onDelete(frame)}
+                    title="Delete frame"
+                  >
+                    {deletingFrameId === frame.id ? "…" : "Delete"}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
     </section>
